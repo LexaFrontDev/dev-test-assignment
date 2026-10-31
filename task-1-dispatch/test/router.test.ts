@@ -63,7 +63,115 @@ test('geo: без координат заказ не распределяетс�
   assert.equal(res.rule, 'unassigned');
 });
 
-test.todo('pickup_point: пункт выдачи закреплён за филиалом');
-test.todo('city: в городе заказа один филиал магазина');
-test.todo('geo: если в городе несколько филиалов, выбирается ближайший из них');
-test.todo('лимит: заполненный филиал пропускается');
+test('pickup_point: пункт выдачи закреплён за филиалом', () => {
+  const branchA = branch({ id: 'b-a' });
+  const branchB = branch({
+    id: 'b-b',
+    city: 'Астана',
+    pickupPointIds: ['pp-1', 'pp-2'],
+  });
+
+  const res = assignBranch(
+      order({ pickupPointId: 'pp-1' }),
+      [branchA, branchB],
+  );
+
+  assert.deepEqual(res, {
+    orderId: 'o-1',
+    branchId: 'b-b',
+    rule: 'pickup_point',
+  });
+});
+
+test('pickup_point: неизвестный пункт выдачи пропускается', () => {
+  const res = assignBranch(
+      order({pickupPointId: 'unknown', city: 'Конаев',}),
+      [almaty, astana],
+  );
+
+  assert.equal(res.rule, 'geo');
+});
+
+test('pickup_point: неактивный филиал игнорируется', () => {
+  const closed = branch({id: 'b-closed', pickupPointIds: ['pp-1'], active: false,});
+
+  const res = assignBranch(
+      order({ pickupPointId: 'pp-1' }),
+      [almaty, closed],
+  );
+
+  assert.notEqual(res.branchId, 'b-closed');
+});
+
+test('pickup_point: неактивный филиал игнорируется', () => {
+  const closed = branch({id: 'b-closed', pickupPointIds: ['pp-1'], active: false,});
+
+  const res = assignBranch(
+      order({pickupPointId: 'pp-1', city: 'Конаев',}),
+      [almaty, astana, closed],
+  );
+
+  assert.notEqual(res.branchId, 'b-closed');
+  assert.equal(res.rule, 'geo');
+});
+
+test('city: в городе заказа ровно один филиал', () => {
+  const branchA = branch({ id: 'b-a', city: 'Алматы' });
+  const branchB = branch({ id: 'b-b', city: 'Астана' });
+
+  const res = assignBranch(
+      order({ city: 'Алматы'}),
+      [branchA, branchB],
+  );
+
+  assert.deepEqual(res, {orderId: 'o-1', branchId: 'b-a', rule: 'city'});
+});
+
+test('city: сравнение городов игнорирует регистр и пробелы', () => {
+  const branchA = branch({ id: 'b-a', city: 'Алматы'});
+  const branchB = branch({ id: 'b-b', city: 'Астана'});
+
+  const res = assignBranch(
+      order({ city: ' алматы ' }),
+      [branchA, branchB],
+  );
+
+  assert.equal(res.rule, 'city');
+  assert.equal(res.branchId, 'b-a');
+});
+
+test('city: несколько филиалов в городе переводят выбор к geo', () => {
+  const branchA = branch({id: 'b-a', city: 'Алматы', lat: 43.20, lon: 76.90});
+  const branchB = branch({id: 'b-b', city: 'Алматы', lat: 43.30, lon: 76.90});
+  const branchC = branch({id: 'b-c', city: 'Астана', lat: 43.21, lon: 76.90});
+
+  const res = assignBranch(
+      order({city: 'Алматы', lat: 43.21, lon: 76.90}),
+      [branchA, branchB, branchC],
+  );
+
+  assert.equal(res.rule, 'geo');
+  assert.equal(res.branchId, 'b-a');
+});
+
+test('geo: если в городе нет филиалов, поиск идёт среди всех', () => {
+  const res = assignBranch(
+      order({ city: 'Конаев', lat: 43.25, lon: 76.93}),
+      [almaty, astana],
+  );
+
+  assert.equal(res.rule, 'geo');
+  assert.equal(res.branchId, 'b-ala');
+});
+
+test('manual имеет приоритет над всеми остальными правилами', () => {
+  const res = assignBranch(
+      order({manualBranchId: 'b-ast', pickupPointId: 'pp-1'}),
+      [almaty, { ...astana, pickupPointIds: ['pp-1'] },],
+  );
+
+  assert.equal(res.rule, 'manual');
+  assert.equal(res.branchId, 'b-ast');
+});
+
+test.todo('лимит: заполненный филиал пропускается')
