@@ -1,62 +1,83 @@
 import type { Assignment, Branch, Order } from './types.ts';
-import { distanceKm } from './geo.ts';
+import { distanceKm } from './utils/geo.ts';
+import {
+  isBranchFull,
+  type ExistingAssignment,
+} from './services/capacity.service.ts';
 
 export function assignBranch(
     order: Order,
     branches: Branch[],
+    assignments: ExistingAssignment[] = [],
 ): Assignment {
   const own = branches.filter(
-      (b) => b.storeId === order.storeId && b.active
+      (b) => b.storeId === order.storeId && b.active,
   );
 
   if (order.manualBranchId) {
     const manual = own.find((b) => b.id === order.manualBranchId);
-    if (manual) {
-      return { orderId: order.id, branchId: manual.id, rule: 'manual' };
-    }
+    if (manual) return {orderId: order.id, branchId: manual.id, rule: 'manual'};
   }
+
+  let selected: Branch | null = null;
+  let rule: Assignment['rule'] = 'unassigned';
 
   if (own.length === 1) {
-    return { orderId: order.id, branchId: own[0].id, rule: 'single' };
+    selected = own[0];
+    rule = 'single';
   }
 
-  const pickup = findByPickupPoint(order, own);
-  if (pickup) {
-    return { orderId: order.id, branchId: pickup.id, rule: 'pickup_point' };
+  if (!selected) {
+    selected = findByPickupPoint(order, own);
+    if (selected) rule = 'pickup_point';
   }
 
-  const city = findByCity(order, own);
-  if (city) {
-    return { orderId: order.id, branchId: city.id, rule: 'city' };
+  if (!selected) {
+    selected = findByCity(order, own);
+    if (selected) rule = 'city';
   }
 
-  const nearest = findNearest(order, own);
-  if (nearest) {
-    return { orderId: order.id, branchId: nearest.id, rule: 'geo' };
+  if (!selected) {
+    const cityBranches = own.filter(
+        (b) => normalizeCity(b.city) === normalizeCity(order.city),
+    );
+
+    const candidates = cityBranches.length > 1 ? cityBranches : own;
+
+    selected = findNearest(order, candidates);
+
+    if (selected) rule = 'geo';
   }
 
-  return { orderId: order.id, branchId: null, rule: 'unassigned' };
+  if (!selected) return {orderId: order.id, branchId: null, rule: 'unassigned',};
+
+  if (!isBranchFull(selected, order, assignments)) {
+    return {orderId: order.id, branchId: selected.id, rule};
+  }
+
+  const available = own.filter(
+      (branch) => !isBranchFull(branch, order, assignments),
+  );
+
+  const nearest = findNearest(order, available);
+
+  if (!nearest) return {orderId: order.id, branchId: null, rule: 'unassigned'};
+
+  return {orderId: order.id, branchId: nearest.id, rule: 'geo'};
 }
 
-
-function findByPickupPoint(
-    order: Order,
-    branches: Branch[],
-): Branch | null {
+function findByPickupPoint(order: Order, branches: Branch[],): Branch | null {
   if (!order.pickupPointId) return null;
 
   return branches.find((b) =>
-      b.pickupPointIds.includes(order.pickupPointId!)
+      b.pickupPointIds.includes(order.pickupPointId!),
   ) ?? null;
 }
 
-function findByCity(
-    order: Order,
-    branches: Branch[],
-): Branch | null {
+function findByCity(order: Order, branches: Branch[]): Branch | null {
   const matches = branches.filter(
       (branch) =>
-          normalizeCity(branch.city) === normalizeCity(order.city)
+          normalizeCity(branch.city) === normalizeCity(order.city),
   );
 
   return matches.length === 1 ? matches[0] : null;
@@ -69,23 +90,14 @@ function normalizeCity(city: string): string {
 function findNearest(order: Order, branches: Branch[]): Branch | null {
   if (order.lat === null || order.lon === null) return null;
 
-  const cityBranches = branches.filter(
-      (b) => normalizeCity(b.city) === normalizeCity(order.city)
-  );
-
-  const candidates = cityBranches.length > 1
-      ? cityBranches
-      : branches;
-
   let best: Branch | null = null;
   let bestDist = Infinity;
 
-  for (const b of candidates) {
-    const d = distanceKm(order.lat, order.lon, b.lat, b.lon);
-
-    if (d < bestDist) {
-      best = b;
-      bestDist = d;
+  for (const branch of branches) {
+    const distance = distanceKm(order.lat, order.lon, branch.lat, branch.lon);
+    if (distance < bestDist) {
+      best = branch;
+      bestDist = distance;
     }
   }
 

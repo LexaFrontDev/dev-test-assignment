@@ -1,8 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { assignBranch } from '../src/router.ts';
-import { distanceKm } from '../src/geo.ts';
+import { distanceKm } from '../src/utils/geo.ts';
 import type { Branch, Order } from '../src/types.ts';
+import { assignments } from '../src/assignment.store.ts';
+import { assignOrder } from '../src/controllers/order.controller.ts';
+import { orders } from '../src/store.ts';
 
 const branch = (over: Partial<Branch>): Branch => ({
   id: 'b-1',
@@ -92,15 +95,16 @@ test('pickup_point: неизвестный пункт выдачи пропус�
   assert.equal(res.rule, 'geo');
 });
 
-test('pickup_point: неактивный филиал игнорируется', () => {
-  const closed = branch({id: 'b-closed', pickupPointIds: ['pp-1'], active: false,});
+test('pickup_point имеет приоритет над city', () => {
+  const branchA = branch({id: 'b-a', city: 'Алматы'});
+  const branchB = branch({id: 'b-b', city: 'Астана', pickupPointIds: ['pp-1']});
 
   const res = assignBranch(
-      order({ pickupPointId: 'pp-1' }),
-      [almaty, closed],
+      order({city: 'Алматы', pickupPointId: 'pp-1'}),
+      [branchA, branchB],
   );
 
-  assert.notEqual(res.branchId, 'b-closed');
+  assert.deepEqual(res, {orderId: 'o-1', branchId: 'b-b', rule: 'pickup_point'});
 });
 
 test('pickup_point: неактивный филиал игнорируется', () => {
@@ -174,4 +178,134 @@ test('manual имеет приоритет над всеми остальным�
   assert.equal(res.branchId, 'b-ast');
 });
 
-test.todo('лимит: заполненный филиал пропускается')
+
+test('manual: назначает заполненный филиал', () => {
+  const branchA = branch({id: 'b-a', dailyLimit: 1});
+
+  const res = assignBranch(
+      order({ manualBranchId: 'b-a' }),
+      [branchA],
+      [{branchId: 'b-a', createdAt: '2026-11-16T07:00:00Z',}],
+  );
+
+  assert.deepEqual(res, {orderId: 'o-1', branchId: 'b-a', rule: 'manual'});
+});
+
+
+test('capacity: заполненный ближайший филиал пропускается', () => {
+  const branchA = branch({id: 'b-a', city: 'Алматы', lat: 43.25, lon: 76.92, dailyLimit: 1,});
+  const branchB = branch({id: 'b-b', city: 'Алматы', lat: 43.30, lon: 76.92, dailyLimit: 10,});
+
+  const res = assignBranch(
+      order({city: 'Алматы', lat: 43.25, lon: 76.92,}),
+      [branchA, branchB],
+      [{branchId: 'b-a', createdAt: '2026-11-16T07:00:00Z'}],
+  );
+
+  assert.deepEqual(res, {orderId: 'o-1', branchId: 'b-b', rule: 'geo',});
+});
+
+test('capacity: заказы предыдущего дня Алматы не учитываются', () => {
+  const branchA = branch({id: 'b-a', dailyLimit: 1});
+
+  const res = assignBranch(
+      order({createdAt: '2026-11-16T06:00:00Z',}),
+      [branchA],
+      [{branchId: 'b-a', createdAt: '2026-11-15T18:50:00Z'},],
+  );
+
+  assert.deepEqual(res, {orderId: 'o-1', branchId: 'b-a', rule: 'single'});
+});
+
+
+test('capacity: если все филиалы заполнены, возвращается unassigned', () => {
+  const branchA = branch({id: 'b-a', dailyLimit: 1,});
+  const branchB = branch({id: 'b-b', city: 'Астана', dailyLimit: 1});
+
+  const res = assignBranch(
+      order({ city: 'Алматы' }),
+      [branchA, branchB],
+      [
+          {branchId: 'b-a', createdAt: '2026-11-16T07:00:00Z',},
+          {branchId: 'b-b', createdAt: '2026-11-16T08:00:00Z',},
+      ],
+  );
+
+  assert.deepEqual(res, {orderId: 'o-1', branchId: null, rule: 'unassigned'});
+});
+
+
+
+test('capacity: ищет свободный филиал за пределами города заказа', () => {
+  const branchA = branch({
+    id: 'b-a',
+    city: 'Алматы',
+    lat: 43.20,
+    lon: 76.90,
+    dailyLimit: 1,
+  });
+
+  const branchB = branch({
+    id: 'b-b',
+    city: 'Алматы',
+    lat: 43.30,
+    lon: 76.90,
+    dailyLimit: 1,
+  });
+
+  const branchC = branch({
+    id: 'b-c',
+    city: 'Астана',
+    lat: 51.128,
+    lon: 71.43,
+    dailyLimit: 1,
+  });
+
+  const res = assignBranch(
+      order({city: 'Алматы', lat: 43.20, lon: 76.90,}),
+      [branchA, branchB, branchC],
+      [
+        {
+          branchId: 'b-a',
+          createdAt: '2026-11-16T07:00:00Z',
+        },
+        {
+          branchId: 'b-b',
+          createdAt: '2026-11-16T08:00:00Z',
+        },
+      ],
+  );
+
+  assert.deepEqual(res, {orderId: 'o-1', branchId: 'b-c', rule: 'geo'});
+});
+
+test('API: повторное назначение не создаёт дубликат', () => {
+  assignments.length = 0;
+
+  const order = orders[0];
+  assert.ok(order, 'Test order must exist');
+
+  const first = assignOrder(order.id);
+  const second = assignOrder(order.id);
+
+  assert.deepEqual(first, second);
+  assert.equal(assignments.length, 1);
+});
+
+test('API: повторное назначение учитывается в загрузке один раз', () => {
+  assignments.length = 0;
+  const order = orders[0];
+  assert.ok(order, 'Test order must exist');
+  const first = assignOrder(order.id);
+  const second = assignOrder(order.id);
+
+  assert.deepEqual(first, second);
+
+  if (!first?.branchId) assert.fail('Order must be assigned to a branch');
+
+  const assigned = assignments.filter(
+      (assignment) => assignment.branchId === first.branchId,
+  );
+
+  assert.equal(assigned.length, 1);
+});

@@ -1,5 +1,8 @@
 import { createServer, type ServerResponse } from 'node:http';
 import { branches, orders } from './store.ts';
+import {assignOrder, assignOrderController} from './controllers/order.controller.ts';
+import { getBranchLoad } from './controllers/branch.controller.ts';
+import { send } from './utils/http.ts';
 
 const port = Number(process.env.PORT ?? 3001);
 
@@ -8,6 +11,28 @@ const server = createServer((req, res) => {
   const parts = url.pathname.split('/').filter(Boolean);
 
   try {
+    if (
+        req.method === 'POST' &&
+        parts[0] === 'orders' &&
+        parts[2] === 'assign' &&
+        parts.length === 3
+    ) {
+      return assignOrderController(parts[1], res);
+    }
+
+    if (
+        req.method === 'GET' &&
+        parts[0] === 'branches' &&
+        parts[2] === 'load' &&
+        parts.length === 3
+    ) {
+      return getBranchLoad(
+          parts[1],
+          url.searchParams.get('date'),
+          res,
+      );
+    }
+
     if (req.method === 'GET' && url.pathname === '/branches') {
       return send(res, 200, branches);
     }
@@ -25,10 +50,6 @@ const server = createServer((req, res) => {
   }
 });
 
-function send(res: ServerResponse, status: number, body: unknown) {
-  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
-  res.end(JSON.stringify(body));
-}
 
 server.listen(port, () => {
   console.log(`dispatch: http://localhost:${port}`);
