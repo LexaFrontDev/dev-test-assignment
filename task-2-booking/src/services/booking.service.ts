@@ -5,6 +5,7 @@ import { normalizeKzPhone } from './phone.service.ts';
 import { TZ_OFFSET } from '../time.ts';
 import { isValidDate } from '../utils/date.ts';
 import type { Booking } from '../types.ts';
+import { now } from '../clock.ts';
 
 type Result = { status: number; body: unknown; };
 type CreateBookingInput = {
@@ -94,5 +95,27 @@ export async function createBooking(input: unknown): Promise<Result> {
 
         await bookingRepo.insert(booking);
         return { status: 201, body: booking };
+    });
+}
+
+export async function cancelBooking(id: string): Promise<Result> {
+    const existing = await bookingRepo.get(id);
+    if (!existing) return { status: 404, body: { error: 'booking_not_found' } };
+
+    return bookingRepo.withMasterLock(existing.masterId, async () => {
+        const booking = await bookingRepo.get(id);
+        if (!booking) return { status: 404, body: { error: 'booking_not_found' } };
+        if (booking.status === 'cancelled') return { status: 200, body: booking };
+
+        const TWO_HOURS = 2 * 60 * 60 * 1000;
+        const timeUntilStart = Date.parse(booking.start) - now().getTime();
+
+        if (timeUntilStart < TWO_HOURS) return { status: 409, body: { error: 'too_late' } };
+
+        await bookingRepo.update(id, { status: 'cancelled' });
+        return {
+            status: 200,
+            body: { ...booking, status: 'cancelled' },
+        };
     });
 }

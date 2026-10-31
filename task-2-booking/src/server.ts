@@ -2,7 +2,7 @@ import { send } from './utils/http.ts';
 import { createServer, type IncomingMessage } from 'node:http';
 import { masters, services } from './store.ts';
 import { getMasterSlots } from './controllers/master.controller.ts';
-import { createBookingController } from './controllers/booking.controller.ts';
+import {cancelBookingController, createBookingController,} from './controllers/booking.controller.ts';
 
 const port = Number(process.env.PORT ?? 3002);
 
@@ -18,6 +18,13 @@ const server = createServer(async (req, res) => {
           url.searchParams
       );
 
+      return send(res, result.status, result.body);
+    }
+
+    const bookingMatch = url.pathname.match(/^\/bookings\/([^/]+)$/);
+
+    if (req.method === 'DELETE' && bookingMatch) {
+      const result = await cancelBookingController(bookingMatch[1]);
       return send(res, result.status, result.body);
     }
 
