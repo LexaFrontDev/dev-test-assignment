@@ -1,5 +1,7 @@
-import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { send } from './utils/http.ts';
+import { createServer, type IncomingMessage } from 'node:http';
 import { masters, services } from './store.ts';
+import { getMasterSlots } from './controllers/master.controller.ts';
 
 const port = Number(process.env.PORT ?? 3002);
 
@@ -7,6 +9,17 @@ const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', 'http://localhost');
 
   try {
+    const slotsMatch = url.pathname.match(/^\/masters\/([^/]+)\/slots$/);
+
+    if (req.method === 'GET' && slotsMatch) {
+      const result = await getMasterSlots(
+          slotsMatch[1],
+          url.searchParams
+      );
+
+      return send(res, result.status, result.body);
+    }
+
     if (req.method === 'GET' && url.pathname === '/masters') {
       return send(res, 200, masters);
     }
@@ -28,10 +41,6 @@ async function readJson(req: IncomingMessage): Promise<unknown> {
   return raw ? JSON.parse(raw) : null;
 }
 
-function send(res: ServerResponse, status: number, body: unknown) {
-  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
-  res.end(JSON.stringify(body));
-}
 
 server.listen(port, () => {
   console.log(`booking: http://localhost:${port}`);
