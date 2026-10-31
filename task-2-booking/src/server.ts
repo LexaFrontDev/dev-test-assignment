@@ -2,6 +2,7 @@ import { send } from './utils/http.ts';
 import { createServer, type IncomingMessage } from 'node:http';
 import { masters, services } from './store.ts';
 import { getMasterSlots } from './controllers/master.controller.ts';
+import { createBookingController } from './controllers/booking.controller.ts';
 
 const port = Number(process.env.PORT ?? 3002);
 
@@ -18,6 +19,21 @@ const server = createServer(async (req, res) => {
       );
 
       return send(res, result.status, result.body);
+    }
+
+    if (req.method === 'POST' && url.pathname === '/bookings') {
+      try {
+        const body = await readJson(req);
+        const result = await createBookingController(body);
+
+        return send(res, result.status, result.body);
+      } catch (err) {
+        if (err instanceof SyntaxError) {
+          return send(res, 400, { error: 'invalid_body' });
+        }
+
+        throw err;
+      }
     }
 
     if (req.method === 'GET' && url.pathname === '/masters') {

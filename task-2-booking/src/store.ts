@@ -16,10 +16,14 @@ const bookings: Booking[] = load('bookings.json');
 // Имитация сетевой задержки до БД. Не убирать: в проде запросы тоже не мгновенные.
 const latency = () => new Promise((r) => setTimeout(r, 5 + Math.random() * 15));
 
+const masterLocks = new Map<string, Promise<void>>();
+
 export const bookingRepo = {
   async listByMaster(masterId: string): Promise<Booking[]> {
     await latency();
-    return bookings.filter((b) => b.masterId === masterId).map((b) => ({ ...b }));
+    return bookings
+        .filter((b) => b.masterId === masterId)
+        .map((b) => ({ ...b }));
   },
 
   async get(id: string): Promise<Booking | null> {
@@ -38,4 +42,25 @@ export const bookingRepo = {
     const found = bookings.find((b) => b.id === id);
     if (found) Object.assign(found, patch);
   },
+
+  async withMasterLock<T>(masterId: string, callback: () => Promise<T>): Promise<T> {
+    const previous = masterLocks.get(masterId) ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    masterLocks.set(masterId, current);
+    await previous;
+
+    try {
+      return await callback();
+    } finally {
+      release();
+
+      if (masterLocks.get(masterId) === current) masterLocks.delete(masterId);
+    }
+  },
 };
+
+
